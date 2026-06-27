@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Stock Portfolio Tracker</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  </head>
+  <body>
+    <h1>Stock Portfolio Tracker</h1>
+    <p class="subtitle">
+      <span class="status-dot"></span>
+      Live — connected to ws://localhost:8000/ws
+    </p>
+
+    <div class="grid" id="ticker-grid"></div>
+
+    <div class="section">
+      <div class="section-title" id="chart-label">Price chart — AAPL</div>
+      <div class="chart-box">
+        <canvas id="price-chart"></canvas>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Portfolio</div>
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Name</th>
+            <th>Qty</th>
+            <th>Buy price</th>
+            <th>Current price</th>
+            <th>P&amp;L</th>
+          </tr>
+        </thead>
+        <tbody id="portfolio-body"></tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Price alerts</div>
+      <div class="alert-feed" id="alert-feed">
+        <p class="no-alerts">No alerts yet — watching thresholds...</p>
+      </div>
+    </div>
+
+    <script>
+      const API = "http://localhost:8000";
+      const WS = "ws://localhost:8000/ws";
+
+      const buffers = {};
+      const timeLabels = {};
+      const smaBuffers = {};
+      let activeSymbol = "AAPL";
+      let prevPrices = {};
+
+      // ── Chart ──────────────────────────────────────────────────────
+      const chart = new Chart(
+        document.getElementById("price-chart").getContext("2d"),
+        {
+          type: "line",
+          data: {
+            labels: [],
+            datasets: [
+              {
+                label: "Price",
+                data: [],
+                borderColor: "#4f8ef7",
+                borderWidth: 2,
+                pointRadius: 0,
+                tension: 0.3,
+              },
+              {
+                label: "SMA 20",
+                data: [],
+                borderColor: "#f5a623",
+                borderWidth: 1.5,
+                borderDash: [4, 4],
+                pointRadius: 0,
+                tension: 0.3,
+              },
+            ],
+          },
+          options: {
+            animation: false,
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { labels: { color: "#888", font: { size: 12 } } },
+            },
+            scales: {
+              x: {
+                ticks: { color: "#444", maxTicksLimit: 6 },
+                grid: { color: "#1e2130" },
+              },
+              y: { ticks: { color: "#888" }, grid: { color: "#1e2130" } },
+            },
+          },
+        },
+      );
+
+      function updateChart(symbol) {
+        activeSymbol = symbol;
+        document.getElementById("chart-label").textContent =
+          `Price chart — ${symbol}`;
+        chart.data.labels = (timeLabels[symbol] || []).slice();
+        chart.data.datasets[0].data = (buffers[symbol] || []).slice();
+        chart.data.datasets[1].data = (smaBuffers[symbol] || []).slice();
+        chart.update();
+      }
+
+      // Ticker cards
+      function renderCards(stocks) {
+        const grid = document.getElementById("ticker-grid");
+        grid.innerHTML = "";
+        stocks.forEach((s) => {
+          buffers[s.symbol] = [];
+          timeLabels[s.symbol] = [];
+          smaBuffers[s.symbol] = [];
+          prevPrices[s.symbol] = s.current_price;
+
+          const card = document.createElement("div");
+          card.className =
+            "ticker-card" + (s.symbol === activeSymbol ? " active" : "");
+          card.id = `card-${s.symbol}`;
+          card.innerHTML = `
+        <div class="ticker-symbol">${s.symbol}</div>
+        <div class="ticker-price"  id="price-${s.symbol}">$${s.current_price.toFixed(2)}</div>
+        <div class="ticker-change" id="change-${s.symbol}">—</div>
+        <div class="ticker-sma"    id="sma-${s.symbol}">SMA —</div>
+      `;
+          card.onclick = () => {
+            document
+              .querySelectorAll(".ticker-card")
+              .forEach((c) => c.classList.remove("active"));
+            card.classList.add("active");
+            updateChart(s.symbol);
+          };
+          grid.appendChild(card);
+        });
+      }
+
+      // Portfolio table
+      function renderPortfolio(rows) {
+        document.getElementById("portfolio-body").innerHTML = rows
+          .map((r) => {
+            const cls = r.pnl >= 0 ? "up" : "down";
+            const sign = r.pnl >= 0 ? "+" : "";
+            return `
+        <tr>
+          <td><strong>${r.symbol}</strong></td>
+          <td>${r.name}</td>
+          <td>${r.quantity}</td>
+          <td>$${r.buy_price.toFixed(2)}</td>
+          <td id="cur-${r.symbol}">$${r.current_price.toFixed(2)}</td>
+          <td><span class="badge ${cls}" id="pnl-${r.symbol}">${sign}$${r.pnl.toFixed(2)}</span></td>
+        </tr>`;
+          })
+          .join("");
+      }
+
+      // WebSocket tick handler
+      function onTick(tick) {
+        const { symbol, price, sma_20, timestamp } = tick;
+        const time = new Date(timestamp).toLocaleTimeString();
+
+        // update buffers — max 50 points
+        buffers[symbol].push(price);
+        timeLabels[symbol].push(time);
+        smaBuffers[symbol].push(sma_20);
+        if (buffers[symbol].length > 50) {
+          buffers[symbol].shift();
+          timeLabels[symbol].shift();
+          smaBuffers[symbol].shift();
+        }
+
+        if (symbol === activeSymbol) updateChart(symbol);
+
+        // ticker card update
+        const prev = prevPrices[symbol] || price;
+        const pct = (((price - prev) / prev) * 100).toFixed(3);
+        const dir = price >= prev ? "up" : "down";
+        const arrow = price >= prev ? "▲" : "▼";
+
+        const el = (id) => document.getElementById(id);
+        if (el(`price-${symbol}`))
+          el(`price-${symbol}`).textContent = `$${price.toFixed(2)}`;
+        if (el(`change-${symbol}`)) {
+          el(`change-${symbol}`).textContent = `${arrow} ${Math.abs(pct)}%`;
+          el(`change-${symbol}`).className = `ticker-change ${dir}`;
+        }
+        if (el(`sma-${symbol}`))
+          el(`sma-${symbol}`).textContent =
+            `SMA ${sma_20 ? sma_20.toFixed(2) : "—"}`;
+
+        // portfolio current price update
+        if (el(`cur-${symbol}`))
+          el(`cur-${symbol}`).textContent = `$${price.toFixed(2)}`;
+
+        prevPrices[symbol] = price;
+      }
+
+      function onAlert(alert) {
+        const feed = document.getElementById("alert-feed");
+        const placeholder = feed.querySelector(".no-alerts");
+        if (placeholder) placeholder.remove();
+        const item = document.createElement("div");
+        item.className = "alert-item";
+        item.textContent = `[${new Date().toLocaleTimeString()}] ${alert.message}`;
+        feed.prepend(item);
+      }
+
+      // ── WebSocket connection ───────────────────────────────────────
+      function connectWS() {
+        const ws = new WebSocket(WS);
+        ws.onmessage = (e) => {
+          const data = JSON.parse(e.data);
+          if (data.type === "alert") onAlert(data);
+          else onTick(data);
+        };
+        ws.onclose = () => setTimeout(connectWS, 2000);
+      }
+
+      // ── Init ───────────────────────────────────────────────────────
+      async function init() {
+        const [stocks, portfolio] = await Promise.all([
+          fetch(`${API}/stocks`).then((r) => r.json()),
+          fetch(`${API}/portfolio`).then((r) => r.json()),
+        ]);
+        renderCards(stocks);
+        renderPortfolio(portfolio);
+        connectWS();
+      }
+
+      init();
+    </script>
+  </body>
+</html>
