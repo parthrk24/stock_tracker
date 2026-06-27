@@ -79,6 +79,15 @@ h1 {
   margin-bottom: 12px;
 }
 
+.portfolio-summary {
+  font-size: 13px;
+  color: #888;
+  margin-bottom: 10px;
+}
+.portfolio-summary .badge {
+  margin-left: 6px;
+}
+
 .chart-box {
   background: #1a1d27;
   border: 1px solid #2a2d3a;

@@ -30,6 +30,15 @@ SEED_STOCKS = [
     {"symbol": "AMZN",  "name": "Amazon.com Inc.",   "current_price": 178.0},
 ]
 
+# sample holdings — symbol: (quantity, buy_price)
+SEED_HOLDINGS = {
+    "AAPL":  (25, 165.0),
+    "GOOGL": (15, 132.0),
+    "MSFT":  (10, 360.0),
+    "TSLA":  (8,  260.0),  # underwater on purpose, so P&L colors both show
+    "AMZN":  (20, 170.0),
+}
+
 async def seed_stocks():
     """Insert stocks only if table is empty."""
     async with AsyncSessionLocal() as session:
@@ -43,3 +52,24 @@ async def seed_stocks():
                 print("[db] stocks seeded")
             else:
                 print("[db] stocks already seeded, skipping")
+
+async def seed_portfolio():
+    """Insert sample holdings only if portfolio table is empty."""
+    async with AsyncSessionLocal() as session:
+        async with session.begin():
+            result = await session.execute(text("SELECT COUNT(*) FROM portfolio"))
+            count = result.scalar()
+            if count == 0:
+                from models import Portfolio
+                stock_rows = await session.execute(text("SELECT id, symbol FROM stocks"))
+                id_by_symbol = {row.symbol: row.id for row in stock_rows}
+                for symbol, (qty, buy_price) in SEED_HOLDINGS.items():
+                    if symbol in id_by_symbol:
+                        session.add(Portfolio(
+                            stock_id=id_by_symbol[symbol],
+                            quantity=qty,
+                            buy_price=buy_price,
+                        ))
+                print("[db] portfolio seeded")
+            else:
+                print("[db] portfolio already seeded, skipping")

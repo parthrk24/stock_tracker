@@ -25,6 +25,7 @@
 
     <div class="section">
       <div class="section-title">Portfolio</div>
+      <div class="portfolio-summary" id="portfolio-summary"></div>
       <table>
         <thead>
           <tr>
@@ -144,7 +145,20 @@
       }
 
       // Portfolio table
+      let holdings = [];
+
+      function renderSummary() {
+        const total = holdings.reduce((sum, r) => sum + r.pnl, 0);
+        const cls = total >= 0 ? "up" : "down";
+        const sign = total >= 0 ? "+" : "";
+        document.getElementById("portfolio-summary").innerHTML = `
+          Total P&amp;L:
+          <span class="badge ${cls}">${sign}$${total.toFixed(2)}</span>
+        `;
+      }
+
       function renderPortfolio(rows) {
+        holdings = rows;
         document.getElementById("portfolio-body").innerHTML = rows
           .map((r) => {
             const cls = r.pnl >= 0 ? "up" : "down";
@@ -160,6 +174,7 @@
         </tr>`;
           })
           .join("");
+        renderSummary();
       }
 
       // WebSocket tick handler
@@ -196,9 +211,26 @@
           el(`sma-${symbol}`).textContent =
             `SMA ${sma_20 ? sma_20.toFixed(2) : "—"}`;
 
-        // portfolio current price update
-        if (el(`cur-${symbol}`))
-          el(`cur-${symbol}`).textContent = `$${price.toFixed(2)}`;
+        // portfolio current price + P&L update
+        const holding = holdings.find((h) => h.symbol === symbol);
+        if (holding) {
+          holding.current_price = price;
+          holding.pnl =
+            Math.round((price - holding.buy_price) * holding.quantity * 100) /
+            100;
+
+          if (el(`cur-${symbol}`))
+            el(`cur-${symbol}`).textContent = `$${price.toFixed(2)}`;
+
+          const pnlEl = el(`pnl-${symbol}`);
+          if (pnlEl) {
+            const pCls = holding.pnl >= 0 ? "up" : "down";
+            const pSign = holding.pnl >= 0 ? "+" : "";
+            pnlEl.textContent = `${pSign}$${holding.pnl.toFixed(2)}`;
+            pnlEl.className = `badge ${pCls}`;
+          }
+          renderSummary();
+        }
 
         prevPrices[symbol] = price;
       }

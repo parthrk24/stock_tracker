@@ -18,8 +18,13 @@ ALERTS = {
 # in-memory set of active WebSocket connections (filled by api.py)
 active_connections: set = set()
 
+# tracks whether a symbol is currently "armed" (hasn't fired since last
+# dropping back below its target) so we alert once per crossing, not
+# once per tick forever
+_armed = {symbol: True for symbol in ALERTS}
+
 async def broadcast(message: dict):
-    """Push tick to all connected WebSocket clients."""
+    """Push tick (or alert) to all connected WebSocket clients."""
     dead = set()
     for ws in active_connections:
         try:
@@ -29,12 +34,17 @@ async def broadcast(message: dict):
     active_connections.difference_update(dead)
 
 async def check_alerts(redis_client: aioredis.Redis, tick: dict):
-    """Publish to Redis Pub/Sub if price crosses threshold."""
+    """Publish to Redis Pub/Sub once per threshold crossing, re-arming
+    once price drops back below target so it can fire again later."""
     symbol = tick["symbol"]
     price  = tick["price"]
     target = ALERTS.get(symbol)
 
-    if target and price >= target:
+    if target is None:
+        return
+
+    if price >= target and _armed.get(symbol, True):
+        _armed[symbol] = False
         alert = {
             "type":    "alert",
             "symbol":  symbol,
@@ -43,6 +53,23 @@ async def check_alerts(redis_client: aioredis.Redis, tick: dict):
             "message": f"{symbol} crossed target {target}!"
         }
         await redis_client.publish(f"alerts:{symbol}", json.dumps(alert))
+    elif price < target:
+        _armed[symbol] = True
+
+async def run_alert_listener(redis_client: aioredis.Redis):
+    """Subscribes to all alert channels and forwards them to connected
+    WebSocket clients. Without this, alerts were published to Redis
+    Pub/Sub but nothing ever consumed them — the frontend's alert feed
+    would silently never fire."""
+    pubsub = redis_client.pubsub()
+    await pubsub.psubscribe("alerts:*")
+    print("[alert-listener] started")
+
+    async for message in pubsub.listen():
+        if message["type"] != "pmessage":
+            continue
+        alert = json.loads(message["data"])
+        await broadcast(alert)
 
 async def write_tick(tick: dict):
     """Write tick to SQLite — update current price + insert history row."""

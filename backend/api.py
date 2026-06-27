@@ -7,10 +7,10 @@ from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timedelta
 
-from database import get_db, create_tables, seed_stocks
+from database import get_db, create_tables, seed_stocks, seed_portfolio
 from models import Stock, TickHistory, Portfolio
 from producer import run_producer
-from consumer import run_consumer, active_connections
+from consumer import run_consumer, run_alert_listener, active_connections
 
 app = FastAPI(title="Stock Portfolio Tracker")
 
@@ -31,9 +31,11 @@ async def startup():
     global redis_client
     await create_tables()
     await seed_stocks()
+    await seed_portfolio()
     redis_client = await aioredis.from_url("redis://localhost:6379")
     asyncio.create_task(run_producer(redis_client))
     asyncio.create_task(run_consumer(redis_client))
+    asyncio.create_task(run_alert_listener(redis_client))
     print("[api] server ready")
 
 @app.on_event("shutdown")
